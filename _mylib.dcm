@@ -1,0 +1,13 @@
+EESchema-DOCLIB  Version 2.0
+#
+$CMP MMI6331
+D 256 bits prom TTL
+$ENDCMP
+#
+$CMP Voltmeter_DC
+D DC voltmeter
+K voltmeter DC
+F ~
+$ENDCMP
+#
+#End Doc Library

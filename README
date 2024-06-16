@@ -1,0 +1,87 @@
+
+
+BIPOLAR PROM PROGRAMMER
+
+
+Another one in the arena !
+
+This one is based on the Atmega to repeat easily programming a PROM.
+
+It reads the source from a master PROM
+It writes what is memory to a virgin PROM
+
+Values can be modified on the fly if needed. That is similar to
+the 'manual' programmers found everywhere.
+
+A default PROM file is used when 'Read' is pressed and nothing is in the socket.
+The goal of this project was programming a dozen of PROMS, so it makes sense for me
+to have that default loaded.
+
+TODO: use the internal eeprom of the mega to store/retrieve PROM files. 
+TODO: use the serial port to send files (remember entering 32 values is not really
+time consumming, so this is luxury.
+
+I'm using KiCad 5. It works for me until I upgrade my old laptop. Don't send request
+about version.
+
+
+The code is occupying 85% of the AtMega88. What is code consumming is
+the human interface ! Moving to atMega328 is possible.
+TODO: remove DigitalRead DigitalWrite functions (code consumming I think)
+
+version 1.0 of the pcb was really botched to work. Version v1.1 fixed all that
+but I made a mistake with the G6K relay footprint. In this repository, this is
+fixed.
+But I still have 4 usable PCB from JLCPCB. Pin 1 and 8 of each relay need to be
+swapped. It can be done by soldering the relay on the other side. I choose to
+put them on the correct side and inserted insulation on the two pins then solder
+correctly.
+
+Another thing is the ZIF socket. AliExpress 3M Textool is shit reproduction.
+I ordered Aries reproduction, much better but pin space is 'wide'. But they
+can be used. They can also be opened (a good hammer and strong pin) to 
+reinsert each contact to get the narrow version.
+
+HOW TO used
+
+Insert the PROM to copy in the 'Read' socket, press 'R' button
+
+The CRC32 is displayed until another key is pressed.
+If all zero is read, then the default PROM file is used. 
+This is signaled by a double beep.
+
+Use + / - to display each address and content.
+Press V to edit a value (with + / -). Display starts
+blinking.
+Press V again to accept the updated value.
+
+When everything is OK, insert a virgin PROM and press 'W'
+Program will fuse bit 0 on each 32 position, then bit 1
+then ... This limits the relays actuating.
+
+Read of the 'Write' socket is done for comparison. When
+green LED lits, it is a success.
+If not, retry. Only failed bits will be refused.
+
+The serial port reports outputs what the programmer is doing.
+Is is not required to have a terminal nut it helps.
+
+
+I had in mind some flexibility for the current programming 
+(the pulse). I did not explore possibilities of burning
+other brand.
+I have tested the programmer with
+
+N82S23AN (K8608) from Signetics.
+
+
+I have 4 spare PCB to sell (instead of asking 5 new ones to JLPCB).
+I'm not doing that for the money of course but avoid filling my bin.
+
+
+About the PCB
+I wanted sockets and button covered properly in a box. This why
+all 'big' components are on the other side. 
+
+
+
