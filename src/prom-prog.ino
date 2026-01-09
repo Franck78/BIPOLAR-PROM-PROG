@@ -72,6 +72,24 @@ pro.menu.cpu.8MHzatmega88.bootloader.extended_fuses=0x01
 
 #define VERSION "v1.0"
 
+/*
+ * #define TEST
+ * switche code for testing the programming of a new chip
+ * -focuse on repeating a single bit of the inserted prom
+ */
+#define TEST
+
+/*
+ * 
+ * bad TBP18S
+ * 7F 1A 26 1C B6 74 0A 52 A4 D0 E8 AD 3F 06 FF 40 1F 05 04 02 88 37 AA AC 16 AE 24 10 52 A4 F6 FF
+ * 
+ * bad N82S
+ * 7F A0 5B 4F 66 6D 7D 07 7F 6F 81 79 38 3E 1E 00 3F 06 5B 4F 66 ED 7D 07 7F 6F 81 79 38 3E 1E BF
+ * 
+ */
+
+
 
 #include <avr/wdt.h> // watchdog
 
@@ -149,7 +167,9 @@ volatile byte  HC595_REGS[2];
 #define setLed(bitval) ((bitval>0) ? (SET(HC595_REGS[HC595_REG_lamp],7)) : (CLR(HC595_REGS[HC595_REG_lamp],7)))
 
 /*  
- * U4 selects the bit to be programmed. The delay let IRQ propagate to the ls595
+ * U4 selects the bit colums to be programmed. The delay let IRQ propagate to the ls595
+ * Basically turn on the relay to connect the data line of the prom to the correct
+ * voltage generator
  */
 #define setPromBitSelector(v) ( HC595_REGS[HC595_REG_bitsel] = _BV(v & 0B00000111) ); \
         delay (3)
@@ -230,6 +250,9 @@ byte jeutel [32] = { 0x3f, 0x80, 0x5b, 0x4f,  0x66, 0x6d, 0x7d, 0x07,  0x7f, 0x6
                      0x3f, 0x06, 0x5b, 0x4f,  0x66, 0x6d, 0x7d, 0x07,  0x7f, 0x6f, 0x81, 0x79,  0x38, 0x3e, 0x1e, 0x00 };
 
 
+byte gberet [32] = { 0x00, 0x1A, 0x26, 0x1C,  0xB6, 0x74, 0x0A, 0x52,  0xA4, 0xD0, 0xE8, 0xAD,  0x3F, 0x06, 0xFF, 0x40,
+                     0x00, 0x05, 0x04, 0x02,  0x88, 0x37, 0xAA, 0xAC,  0x16, 0xAE, 0x24, 0x10,  0x52, 0xA4, 0xF6, 0xFF };
+
 /*
  * NOT USED YET
  * Data in this structure are written to the eeprom
@@ -251,7 +274,7 @@ class NvRam {
   void Init()
   {
       //Read or Init the eeprom
-      char *b = &d.cm_okflg; 
+      byte *b = &d.cm_okflg; 
 
       for ( byte i = 0; i < sizeof(d); i++, b++)
       {
@@ -764,7 +787,7 @@ void promReadRead() {
     if (eq && n) {
       // copy jeutel
       for (promAddress=0; promAddress<32; promAddress++) {
-        promReadData[promAddress] = jeutel[promAddress];
+        promReadData[promAddress] = gberet[promAddress];
         setDisplay (promAddress, promReadData[promAddress]);
       }
       beepOk();  // beep twice to indicate read from memory
@@ -830,7 +853,19 @@ void promWriteRead() {
  *   Because it works with 10µs and I don't have a lot of 82S23 to throw away, 400µs is not tested
  *   
  */
-void doPulse() {
+
+#define ps_pause (8+16)
+#define ps_turnup (4+8+16)
+#define ps_setvpp (4+16)
+#define ps_setpulse (4)
+#define ps_setvpp5v (16)
+
+
+/*
+ *   Hardware setup
+ *   trimpot 'mid' pos
+ */
+void doPulseNS23() {
 
   noInterrupts();
   PORTD = buckOn+vppNoPulse+vppNoBoost;//buck on + pulse closed + vcc 5v
@@ -880,7 +915,7 @@ void promWriteCopy(){
       byte r = promReadData[address];
       setPromAddr(address);
       delay(30);  // let at least 2 irq to update shift registers
-      // r=255;   // usefull for testing
+      // r=1;   // usefull for testing
       // w=0;
       if ( r & _BV (bit) ) {         // bit needs to be burnt
         if ((w & _BV (bit)) == 0) {  // already burnt, skip it
@@ -891,7 +926,8 @@ void promWriteCopy(){
             Serial.print("/");
             Serial.println(bit);
           }
-          doPulse();
+          doPulseNS23();
+          //while(1);  // debug test, one bit at a tim then let watchdog restart.
         }
       }
     }
@@ -1010,11 +1046,9 @@ void setup()
   DDRB = B00000000;  // Port B input  (set pull up when reading)
   DDRC = B11011111;  // ADC on PC5
   DDRD = B11111110;  // input for buttons
-  PORTC = 0;
-  PORTD = vppNoPulse+vppNoBoost;      // no buck, no vcc, close Q3
+  PORTC = 3;         // CS=1 for sockets
+  PORTD = ps_pause;  // no buck, no vcc, close Q3
 
-  promReadCS1;
-  promWriteCS1;
 
   HC595_REGS[0] = 0;
   HC595_REGS[1] = 0;
@@ -1032,10 +1066,18 @@ void setup()
   Info.setBrightness(7);
 
   Serial.begin(115200);
-  beep2();
-  Serial.println ("\nStarted Bipolar Prom Programmer " VERSION);
+
+  #ifndef TEST
+    beep2();
+    Serial.println ("\nStarted Bipolar Prom Programmer " VERSION);
+  #else
+    Serial.println ("\nDebug Bipolar Prom Programmer");
+    Serial.println();
+  #endif
+  Serial.println();
 };
 
+#ifndef TEST
 /*
  * Detect lonpress on 'V' 
  * 
@@ -1132,3 +1174,211 @@ void loop(){
     default:;
   }
 }
+#else
+
+/*
+ * 
+ * Basically for TBP18S30
+ *     
+ *     mettre les pins non programmées avec R rappel 3K9
+ *     mettre la pin programmée à 0.25v difficile
+ *     vpp 9.25v
+ *     cs pendant 45µ
+ *     vpp 5v
+ * 
+ */
+void doTestPulse() {
+
+  noInterrupts();
+  PORTD = ps_pause;                  //close Q4 to avoid a glitch
+  delay (10);
+  PORTD = ps_turnup;                 // let buck charge caps
+  delay(100);                        // 3 to 4 ms to stabilize buck
+  PORTD = ps_setvpp;                 // power the chip
+  delay(50);                         //
+  PORTD = ps_setpulse;               // power the pin
+  delay(10);                         //
+
+  PORTC = 0b11111110;               // promWrite CS=0
+  delayMicroseconds(40);            // 15µ min to 100µs max (datasheet)
+  PORTC = 0b11111111;               // promWrite CS=1
+  delayMicroseconds(5);             // data sheet insert delay
+  PORTD = ps_setvpp;                 // back to no power on the pin
+  delay(50);                         //
+  PORTD = ps_setvpp5v;               // step a 5v
+  delay(50);                         //
+  PORTD = ps_pause;                  //close Q4 to avoid a glitch
+
+  
+  interrupts();
+  //delay(500);                       // let cool the prom, we are not going after speed.
+}
+
+void waitRestart()
+{
+  setLed(0); 
+  setLedW(0);
+  setLedR(0);
+  while (1) {
+    wdt_reset();
+    switch (getButton()) {
+    
+      case btRead:
+      case btWrite:
+      case btPlus:
+      case btMoins:
+      case btVal:
+      case btValRel:
+           while(1); 
+      default:;
+    }
+  }
+}
+void promWriteDisplay() {
+  byte testByte;
+  setLed(1); 
+  setLedW(0);
+  setLedR(1);
+  Serial.print("W:");
+  clearPromBitSelector;
+  PORTD = vppNoPulse;   // 5v while buck is 'off' goes through the bd139
+  PORTB = 255;          // turn on pull up resistors
+
+  for (promAddress=0; promAddress<32; promAddress++) {
+    setPromAddr(promAddress);
+    delay(30);  // let at least 2 irq to update shift registers
+    promWriteCS0;
+    delayMicroseconds(50);
+    testByte = PINB;
+    promWriteCS1;
+    printHex(testByte);
+    Serial.print(" ");
+  }
+  PORTD = vppNoPulse+vppNoBoost;
+  PORTB = 0; //turn off pull up resistors
+  Serial.println();
+}
+/*
+ * test loop
+ * -find first unprommed bit of the prom
+ * -concentrates on writing it
+ */
+void loop ()
+{
+  byte testByte, newByte;
+  bool pause;
+  
+  setPromBitSelector(0);
+ 
+  PORTD = ps_turnup;                 // let buck charge caps
+  delay(100);                           // 3 to 4 ms to stabilize buck
+  PORTD = ps_setvpp;                 // power the chip
+  delay(50);                         //
+  PORTD = ps_setpulse;               // power the pin
+  delay(50);                         //
+  promWriteDisplay();
+
+  // Find a bit to program
+  setLed(1); 
+  setLedW(0);
+  setLedR(1);
+
+
+  clearPromBitSelector;
+  PORTD = vppNoPulse;   // 5v while buck is 'off' goes through the bd139
+  PORTB = 255;          // turn on pull up resistors
+
+
+  for (promAddress=0; promAddress<32; promAddress++) {
+    setPromAddr(promAddress);
+    delay(30);  // let at least 2 irq to update shift registers
+    promWriteCS0;
+    delayMicroseconds(50);
+    testByte = PINB;
+    promWriteCS1;
+    if (testByte != 255) break;  // found a byte with some bits to burn.
+    wdt_reset();
+  }
+  PORTD = vppNoPulse+vppNoBoost;
+  PORTB = 0; //turn off pull up resistors
+
+
+  byte BIT = 255;
+  //search a bit programmable (eg =0)
+  if ( !(testByte & _BV(0)) ) BIT = 0;
+  if ( !(testByte & _BV(1)) ) BIT = 1;
+  if ( !(testByte & _BV(2)) ) BIT = 2;
+  if ( !(testByte & _BV(3)) ) BIT = 3;
+  if ( !(testByte & _BV(4)) ) BIT = 4;
+  if ( !(testByte & _BV(5)) ) BIT = 5;
+  if ( !(testByte & _BV(6)) ) BIT = 6;
+  if ( !(testByte & _BV(7)) ) BIT = 7;
+
+  if (BIT == 255) {
+    Serial.print("Error, no bit to program in this prom !! ");
+    waitRestart();
+  }
+  Serial.println();
+  Serial.print("Found byte to programm (at ");
+  Serial.print(promAddress);
+  Serial.print(") ");
+  printHex(testByte);
+  Serial.println();
+
+  /*
+   * We have the bit and addressto forcably burn
+   */
+  setPromBitSelector(BIT);
+  setPromAddr(promAddress);
+
+  byte burnCount = 0;
+  do {
+
+    wdt_reset();
+    if (!pause) {
+      Serial.print("Prog loop counter:");
+      Serial.println(++burnCount);
+
+      //set promAdress
+      //setPromAddr(promAddress);
+      //setPromBitSelector(BIT);
+      //delay(200); //relay response
+  
+      doTestPulse();
+      delay(200); //slow a little
+  
+  
+      //read back the byte
+      promWriteCS0;
+      delayMicroseconds(50);
+      newByte = PINB;
+      promWriteCS1;
+    }
+    switch (getButton()) {
+
+    case btRead:
+    case btWrite:
+    case btMoinsRel:
+    case btPlusRel:break;
+    case btPlus:
+           pause = false;
+           setPromBitSelector(BIT);
+           setPromAddr(promAddress);
+           break;
+    case btMoins:
+           pause = true;
+           promWriteDisplay();  
+           break;
+    case btVal:
+    case btValRel:
+
+    default:;
+    }
+
+  } while (newByte == testByte);
+
+  Serial.println("BIT PROGRAMMED");
+  waitRestart();  
+}
+
+#endif
