@@ -70,22 +70,30 @@ pro.menu.cpu.8MHzatmega88.bootloader.extended_fuses=0x01
  * 
  */
 
-#define VERSION "v1.0"
+
+#ifdef __AVR_ATmega8__
+#define VERSION "v2.0 ATmega8"
+#else
+#define VERSION "v2.0 ATmega88P"
+#endif
+
 
 /*
  * #define TEST
  * switche code for testing the programming of a new chip
  * -focuse on repeating a single bit of the inserted prom
+ * 
  */
-#define TEST
+//#define TEST
 
 /*
- * 
+ * These are used for individual bit burning tests ;)
+ *
  * bad TBP18S
- * 7F 1A 26 1C B6 74 0A 52 A4 D0 E8 AD 3F 06 FF 40 1F 05 04 02 88 37 AA AC 16 AE 24 10 52 A4 F6 FF
+ * FF FF FF FF FF FF FF 7F A4 D0 E8 AD 3F 06 FF 40 1F 05 04 02 98 37 AA AC 16 AE 24 11 52 A4 F6 FF
  * 
- * bad N82S
- * 7F A0 5B 4F 66 6D 7D 07 7F 6F 81 79 38 3E 1E 00 3F 06 5B 4F 66 ED 7D 07 7F 6F 81 79 38 3E 1E BF
+ * bad N82S23
+ * 80 A0 5B 4F 66 6D 7D 07 7F 6F 81 79 38 3E 1E 00 3F 06 5B 4F 66 ED 7D 07 7F 6F 81 79 38 3E 1E BF
  * 
  */
 
@@ -96,7 +104,7 @@ pro.menu.cpu.8MHzatmega88.bootloader.extended_fuses=0x01
 /* Some code remaining from another app, not used yet. 
  *
  * Todo (on 328) : store / select prom files in eeprom.
- * It is human interface that is requiring lot of code.
+ * It is the human interface that is requiring lot of code.
  * I don't think the Mega88 have enougth code space.
  * Todo : use serial port to tranfert prom files
  *
@@ -113,8 +121,9 @@ pro.menu.cpu.8MHzatmega88.bootloader.extended_fuses=0x01
  *  blinkState mode.
  *  As I chose interrupt every millisecond to update display
  *  the 'effective' call to the chip TM1637 must be made only 
- *  when a change has occured.This makes the display update 
+ *  when a change has occured. This makes the display update 
  *  a little tricky, and more tricky when blinking 2 digits !
+ *  
  */
 #include "TM1637Display.h"
 
@@ -126,10 +135,12 @@ TM1637Display         Info(tm1637_c,tm1637_d);
 boolean               blinkState;
 boolean               canBlink, canBlink2;
 byte                  digits [4];
+byte                  digitsB [4] = {0,0,0,0}; // blinking version
+
 /*
  *  The crc is displayed just after reading until a button is pressed
  */
-byte                  displayCrc = 0;  //mini state machine, displays high or low part or nothing
+byte                  displayCrc = 0;  // mini state machine, displays high or low part or nothing
 unsigned long         crc;
 
 #define HC595         PORTC
@@ -164,7 +175,7 @@ volatile byte  HC595_REGS[2];
 #define setPromAddr(v) ( HC595_REGS[HC595_REG_lamp] = ( (HC595_REGS[HC595_REG_lamp] & 0B11100000) | (v & 0B00011111) ) )
 #define setLedR(bitval) ((bitval>0) ? (SET(HC595_REGS[HC595_REG_lamp],5)) : (CLR(HC595_REGS[HC595_REG_lamp],5)))
 #define setLedW(bitval) ((bitval>0) ? (SET(HC595_REGS[HC595_REG_lamp],6)) : (CLR(HC595_REGS[HC595_REG_lamp],6)))
-#define setLed(bitval) ((bitval>0) ? (SET(HC595_REGS[HC595_REG_lamp],7)) : (CLR(HC595_REGS[HC595_REG_lamp],7)))
+#define  setLed(bitval) ((bitval>0) ? (SET(HC595_REGS[HC595_REG_lamp],7)) : (CLR(HC595_REGS[HC595_REG_lamp],7)))
 
 /*  
  * U4 selects the bit colums to be programmed. The delay let IRQ propagate to the ls595
@@ -178,9 +189,21 @@ volatile byte  HC595_REGS[2];
 
 // buckOn, vppBoost, vppPulse
 // do not use digitalWrite
-#define buckOn 4        /*(PD2)*/
-#define vppNoBoost 8    /*(PD3)*/
-#define vppNoPulse 16   /*(PD4)*/
+#define buckOn      4   /*(PD2)*/
+#define vppNoBoost  8   /*(PD3)*/
+#define vppQ4      16   /*(PD4)*/
+
+/* 
+ * more expressive macro , 
+ * noZero means Q4 is open for the TBP18S030 
+ * noPulse means Q4 is closed for the N82S23
+ */
+#define VPP0V_Q4open    (0      + vppNoBoost        )
+#define VPP0V_Q4closed  (0      + vppNoBoost + vppQ4) 
+#define VPP5V_Q4open    (0                          )
+#define VPP5V_Q4closed  (0                   + vppQ4)
+#define VPP10V_Q4open   (buckOn                     )
+#define VPP10V_Q4closed (buckOn              + vppQ4)
 
 
 /*
@@ -350,11 +373,9 @@ void NvRam::DiagMode()
  * Limit calls to TM1637 which is time costly
  * 
  */
+ bool TTU;
 ISR (TIMER1_COMPA_vect) {
    static unsigned int blinkCount;
-   static bool         ttu;                 //time to update
-   static byte         actualDigits [4];    // what is really on the display
-   static byte         localDigits [4];     // what we want to display
   
   /*
    * Compiler produces a good code but I wanted to test weird assembler interface !
@@ -493,15 +514,26 @@ ISR (TIMER1_COMPA_vect) {
   // Blinking ~1 second
   // by masking or not the two rightmost digits
   if (!blinkCount--) {
+      TTU=true; 
       blinkCount = 400;  // new cycle
       blinkState = !blinkState;
-      ttu=true;          // time to update
-
+ 
       if (! (canBlink && canBlink2) ) {
         blinkState = 0; // force visible anyway
       }
 
-      // CRC 8 digits repeatedly low or high or nothing
+      /* 
+       *  CRC 8 digits repeatedly low or high or nothing
+       *  just override the displayed digits buffer
+       *  with the CRC high, CRC low, blank
+       *  It is simpler to recalculate each time than using
+       *  another display buffer
+       *  The displayCrc is started after reading a Socket
+       *  and runs until a keypress/new display
+       *  
+       *  It is never called in 'blink mode' so no need to
+       *  worries about digitsB
+      */
       switch (displayCrc) {
 
         case 10:  // high part
@@ -522,46 +554,27 @@ ISR (TIMER1_COMPA_vect) {
           displayCrc = 10;  // restart sequence
         case 0:;            // off, do nothing
           break;
-        case 3:   // 'blank' part by clearing all
-          actualDigits [0] = actualDigits [1] = actualDigits [2] = actualDigits [3] = 0;
-          localDigits [0] = localDigits [1] = localDigits [2] = localDigits [3] = 0;
-          digits [0] = digits [1] = digits [2] = digits [3] = 0;
-          Info.setSegments (actualDigits, 4, 0);
+        case 3:   // 'blank' at last to make visual start on CRC
+          //Info.setSegments (digitsB[2], 4, 0);
+          digits[0] = 0;
+          digits[1] = 0;
+          digits[2] = 0;
+          digits[3] = 0;
 
         default:
           displayCrc--;  // introduce delays to have time to read the CRC between states.
       }
   }
 
-  // check if 'to' display is different from actual display
-  if ( 
-        (localDigits [0] != digits [0]) ||
-        (localDigits [1] != digits [1]) ||
-        (localDigits [2] != digits [2]) ||
-        (localDigits [3] != digits [3])
-     ){
-      ttu = true;
-      localDigits [0] = digits [0];
-      localDigits [1] = digits [1];
-      actualDigits [0] = digits [0];
-      actualDigits [1] = digits [1];
-      localDigits [2] = digits [2];
-      localDigits [3] = digits [3];
-  }
-
-
   // finally decides to update or not the TM1637
-  if (ttu) {
-  
+  // ideally should not be wakeup by the blinking counter.
+  if (TTU) {  //   Serial.print ("x");
     if (blinkState) {  // blink the value, not the address
-      actualDigits [2] = 0;
-      actualDigits [3] = 0;
-    } else {  
-      actualDigits [2] = localDigits [2];
-      actualDigits [3] = localDigits [3];
+          Info.setSegments (digitsB, 4, 0);
+    } else {
+          Info.setSegments (digits, 4, 0);
     }
-    Info.setSegments (actualDigits, 4, 0);
-    ttu=false;
+    TTU = false;
   }
 };
 
@@ -572,13 +585,6 @@ ISR (TIMER1_COMPA_vect) {
  * 
  */
 void setupTimer1() {
-  //TCCR1A = 0;                        // normal operation
-  //TCCR1B = bit(WGM12) | bit(CS10);   // CTC, no pre-scaling
-  //OCR1A =  999;                      // compare A register value (1000 * clock speed)
-  //TIMSK1 = bit (OCIE1A);             // interrupt on Compare A Match
-  // set up Timer 2
-  //TCCR2A = bit (COM1A0);            // toggle OC1A on Compare Match
-  //TCCR2B = bit(WGM12) | bit(CS10) | bit (CS12);   // CTC, scale to clock / 1024
 
   noInterrupts();
   // Clear registers
@@ -593,7 +599,12 @@ void setupTimer1() {
   // Prescaler 64
   TCCR1B |= (1 << CS11) | (1 << CS10);
   // Output Compare Match A Interrupt Enable
-  TIMSK1 |= (1 << OCIE1A);
+
+#ifdef __AVR_ATmega8__
+  TIMSK   |= (1 << OCIE1A);
+#else
+  TIMSK1  |= (1 << OCIE1A);
+#endif
   interrupts();
 }
 
@@ -637,29 +648,52 @@ void debug() {
 }
 
 void beepBad(){
+#ifdef __AVR_ATmega8__
+  byte irq = TIMSK; // noInterrupts();
+  TIMSK = 0;
+#else
   byte irq = TIMSK1; // noInterrupts();
   TIMSK1 = 0;
+#endif
   tone (buzzer, 80);
   delay (400);
   noTone(buzzer);
+#ifdef __AVR_ATmega8__
+  TIMSK = irq;      // restore interrupts();
+#else
   TIMSK1 = irq;      // restore interrupts();
+#endif
 }
 
 void beepOk(){
+#ifdef __AVR_ATmega8__
+  byte irq = TIMSK; // noInterrupts();
+  TIMSK = 0;
+#else
   byte irq = TIMSK1; // noInterrupts();
   TIMSK1 = 0;
+#endif
   tone (buzzer, 600);
   delay (100);
   noTone(buzzer);
   tone (buzzer, 500);
   delay (50);
   noTone(buzzer);
+#ifdef __AVR_ATmega8__
+  TIMSK = irq;      // restore interrupts();
+#else
   TIMSK1 = irq;      // restore interrupts();
+#endif
 }
 
 void beep2(){
+#ifdef __AVR_ATmega8__
+  byte irq = TIMSK; // noInterrupts();
+  TIMSK = 0;
+#else
   byte irq = TIMSK1; // noInterrupts();
   TIMSK1 = 0;
+#endif
   tone (buzzer, 120);
   delay (50);
   noTone(buzzer);
@@ -667,15 +701,39 @@ void beep2(){
   tone (buzzer, 120);
   delay (50);
   noTone(buzzer);
+#ifdef __AVR_ATmega8__
+  TIMSK = irq;      // restore interrupts();
+#else
   TIMSK1 = irq;      // restore interrupts();
+#endif
 }
 
-
+/*
+ * setDisplay
+ * 
+ * converts to something ok for the TM1637 and
+ * also ensures that the IRQ routine is not
+ * doing repeated stuff.
+ * There is a blinking array with blaked digits
+ * 
+ */
 void setDisplay (byte address, byte data) {
-  digits [0] = digitToSegment[address / 10];  // address is decimal
-  digits [1] = digitToSegment[address % 10];
-  digits [2] = digitToSegment[data >> 4];     // value is hexa displayed
-  digits [3] = digitToSegment[data & 0xf];
+  byte d0, d1, d2, d3;
+  d0 = digitToSegment[address / 10];  // address is decimal
+  d1 = digitToSegment[address % 10];
+  d2 = digitToSegment[data >> 4];     // value is hexa displayed
+  d3 = digitToSegment[data & 0xf];
+  noInterrupts();
+  digits [0] = digitsB [0] = d0;
+  digits [1] = digitsB [1] = d1;
+  digits [2]               = d2;
+  digits [3]               = d3;
+               digitsB [2] = 0;
+               digitsB [3] = 0;
+
+  TTU = true;
+  interrupts();
+  
   //Info.setSegments (digits, 4, 0);
 }
 
@@ -817,8 +875,8 @@ void promWriteRead() {
   partialBurn = false;  // assume a win
   Serial.print("W:");
   clearPromBitSelector;
-  PORTD = vppNoPulse;   // 5v while buck is 'off' goes through the bd139
-  PORTB = 255;          // turn on pull up resistors
+  PORTD = VPP5V_Q4open;  // Q4 doesn't matter as long as all relays are open v1.0 for n82s23 was Q4close
+  PORTB = 255;           // turn on pull up resistors
 
   for (promAddress=0; promAddress<32; promAddress++) {
     setPromAddr(promAddress);
@@ -833,7 +891,7 @@ void promWriteRead() {
     Serial.print(" ");
     wdt_reset();
   }
-  PORTD = vppNoPulse+vppNoBoost;
+  PORTD = VPP0V_Q4open;  //v1.0 for n82s23 was Q4close
   PORTB = 0; //turn off pull up resistors
   Serial.println();
   promAddress--; // adjust Display == Index
@@ -854,42 +912,74 @@ void promWriteRead() {
  *   
  */
 
-#define ps_pause (8+16)
-#define ps_turnup (4+8+16)
-#define ps_setvpp (4+16)
-#define ps_setpulse (4)
-#define ps_setvpp5v (16)
 
 
 /*
  *   Hardware setup
  *   trimpot 'mid' pos
  */
-void doPulseNS23() {
+void doPulseN82S23() {
 
   noInterrupts();
-  PORTD = buckOn+vppNoPulse+vppNoBoost;//buck on + pulse closed + vcc 5v
+  PORTD = buckOn+vppNoBoost+vppQ4;     //buck on + vcc 5v + Q4 closed
   delay(20);                           // 3 to 4 ms to stabilize buck
-  PORTD = buckOn+vppNoPulse;           //buck on + pulse closed + vcc 10v
+  PORTD = VPP10V_Q4closed;                //buck on + pulse closed + vcc 10v
   delayMicroseconds(100);
-  PORTD = buckOn;                   // VOUT on : Q3 off, current toward the prom
+  PORTD = VPP10V_Q4open;            // VOUT on : Q3 off, current toward the prom
   delayMicroseconds(100);           // let go up
   PORTC = 0b11111110;               // promWrite CS=0
   delayMicroseconds(10);            // fusing (400µ Elektor), 9 to 11µs on datasheet
   PORTC = 0b11111111;               // promWrite CS=1
   delayMicroseconds(5);             // data sheet insert delay
-  PORTD = buckOn+vppNoPulse;        // power off phase 1
+  PORTD = VPP10V_Q4closed;              // power off phase 1
   delayMicroseconds(5);             // data sheet insert delay
-  PORTD = vppNoPulse+vppNoBoost;    // power off phase 2
+  PORTD = VPP0V_Q4closed;               // power off phase 2
   interrupts();
   delay(500);                       // let cool the prom, we are not going after speed.
 }
 
 
+void doProgTBP18S030() {
+  
+  // address & relay are already set
+  // step are thoses from the datasheet for the TBP18S030
+  noInterrupts();
+  PORTD = VPP5V_Q4open;    //step 1
+                           //step 2 done before
+  delay(50);
+  PORTC = 0b11111111;      //step 3 be sure promWrite CS=1
+
+  // the loop is entirely from me, perhaps usesless !
+  for (byte i=0;i<2;i++)
+  {
+    PORTD = VPP5V_Q4closed;  //step 4 make 0v on the selected pin
+    delay(10);
+    PORTD = VPP10V_Q4closed; //step 5 apply 10v on VPP
+   
+    delayMicroseconds(500);  //step 6 1µ min to 1ms max (datasheet)
+    PORTC = 0b11111110;      //step 6 CS=0
+  
+    delayMicroseconds(30);   //step7 15µs min to 100µs max (datasheet)
+    PORTC = 0b11111111;      //step7 promWrite CS=1
+  
+    delayMicroseconds(20);   //step8  1µ min to 1ms max
+    PORTD = VPP0V_Q4closed;  //the buck capacitors take long time to discharge to 5v
+                             //so cut VPP
+                             //step 9, latter
+    delay(50);               //step 10 mostly wait buck caps to discharge
+    PORTD = VPP0V_Q4open;    //probably can be step8
+    delay(10);
+  }
+
+  interrupts();
+}
+
+
+
 /*
  * Copy: main goal of the prog.
  * 
- * - must have read something with promR
+ * - must have read something with ReadSocket
  * - read promWrite content
  * - for each bit : compare and burn when possible (no unburn here,its OTP)
  * 
@@ -901,7 +991,7 @@ void promWriteCopy(){
     return;
   }
 
-  //We have the source, read content
+  //We have a source, read actual content
   promWriteRead();
 
   //Minimize relays clicks by  doing by bit columns
@@ -926,8 +1016,9 @@ void promWriteCopy(){
             Serial.print("/");
             Serial.println(bit);
           }
-          doPulseNS23();
-          //while(1);  // debug test, one bit at a tim then let watchdog restart.
+          //doPulseN82S23();
+          doProgTBP18S030();
+          //while(1);  // debug test, one bit at a time then let watchdog restart.
         }
       }
     }
@@ -935,7 +1026,7 @@ void promWriteCopy(){
     delay(500);
   }
   delay(300);
-  PORTD=vppNoPulse+vppNoBoost;  
+  PORTD=VPP0V_Q4open;  //v1.0 for n82s23 was Q4close
 
   // Read back the programmed prom and compare
   promWriteRead();
@@ -1047,7 +1138,7 @@ void setup()
   DDRC = B11011111;  // ADC on PC5
   DDRD = B11111110;  // input for buttons
   PORTC = 3;         // CS=1 for sockets
-  PORTD = ps_pause;  // no buck, no vcc, close Q3
+  PORTD = VPP0V_Q4closed; // no buck, no vcc, close Q4
 
 
   HC595_REGS[0] = 0;
@@ -1079,9 +1170,14 @@ void setup()
 
 #ifndef TEST
 /*
+ *    The normal version
+ * 
+ * 
  * Detect lonpress on 'V' 
  * 
  * Todo : do something, for example file selection in eeprom
+ * 
+ *      or oneday switch between model prom (hardcoded now)
  * 
 */
 long int vpress;
@@ -1168,9 +1264,10 @@ void loop(){
       canBlink = promReadEditData;
       if (promReadEditData)
         repeatSpeed=100;
-      else
+      else {
         repeatSpeed=200;
- 
+      }          
+      TTU=true;
     default:;
   }
 }
@@ -1178,49 +1275,104 @@ void loop(){
 
 /*
  * 
- * Basically for TBP18S30
+ * Basically for TBP18S030
  *     
  *     mettre les pins non programmées avec R rappel 3K9
  *     mettre la pin programmée à 0.25v difficile
  *     vpp 9.25v
  *     cs pendant 45µ
  *     vpp 5v
+ *     
+ *     Hardware modification
+ *     
+ *     -remove R11.
+ *      
+ *     -add mosfet N right on Q4 for D, S
+ *     connect G via 2K2 to r27. Idea is
+ *     to avoid C14 effect.
+ *     
  * 
  */
-void doTestPulse() {
 
-  noInterrupts();
-  PORTD = ps_pause;                  //close Q4 to avoid a glitch
-  delay (10);
-  PORTD = ps_turnup;                 // let buck charge caps
-  delay(100);                        // 3 to 4 ms to stabilize buck
-  PORTD = ps_setvpp;                 // power the chip
-  delay(50);                         //
-  PORTD = ps_setpulse;               // power the pin
-  delay(10);                         //
 
-  PORTC = 0b11111110;               // promWrite CS=0
-  delayMicroseconds(40);            // 15µ min to 100µs max (datasheet)
-  PORTC = 0b11111111;               // promWrite CS=1
-  delayMicroseconds(5);             // data sheet insert delay
-  PORTD = ps_setvpp;                 // back to no power on the pin
-  delay(50);                         //
-  PORTD = ps_setvpp5v;               // step a 5v
-  delay(50);                         //
-  PORTD = ps_pause;                  //close Q4 to avoid a glitch
-
+void doProgTBP18S030() {
   
+  // address & relay are already set
+  // step are thoses from the datasheet for the TBP18S030
+  noInterrupts();
+  PORTD = VPP5V_Q4open;    //step 1
+                           //step 2 done before
+  delay(50);
+  PORTC = 0b11111111;      //step 3 be sure promWrite CS=1
+
+  // the loop is entirely from me, perhaps usesless !
+  for (byte i=0;i<2;i++)
+  {
+    PORTD = VPP5V_Q4closed;  //step 4 make 0v on the selected pin
+    delay(10);
+    PORTD = VPP10V_Q4closed; //step 5 apply 10v on VPP
+   
+    delayMicroseconds(500);  //step 6 1µ min to 1ms max (datasheet)
+    PORTC = 0b11111110;      //step 6 CS=0
+  
+    delayMicroseconds(30);   //step7 15µs min to 100µs max (datasheet)
+    PORTC = 0b11111111;      //step7 promWrite CS=1
+  
+    delayMicroseconds(20);   //step8  1µ min to 1ms max
+    PORTD = VPP0V_Q4closed;  //the buck capacitors take long time to discharge to 5v
+                             //so cut VPP
+                             //step 9, latter
+    delay(50);               //step 10 mostly wait buck caps to discharge
+    PORTD = VPP0V_Q4open;    //probably can be step8
+    delay(10);
+  }
+
   interrupts();
-  //delay(500);                       // let cool the prom, we are not going after speed.
 }
 
-void waitRestart()
+
+/*
+ * WaitRestart (true/false):
+ * 
+ * wait for a keypress to restart the program
+ * display the content of R socket before reboot
+ * 
+ * Can also periodically turn on VPP to measure it.
+ * 
+ */
+void waitRestart(bool DoVPP)
 {
-  setLed(0); 
-  setLedW(0);
-  setLedR(0);
+  int  State, Delay = 0; 
+  setLed(1); 
+  setLedW(1);
+  setLedR(1);
   while (1) {
     wdt_reset();
+    // don't stop for a long time so use a counter of 100ms steps.
+    Delay += 100;
+    delay (100);
+    if ((Delay == 1000) && DoVPP)
+    {
+      Delay = 0;        //reset timer
+      switch (State++) {
+        case 0: PORTD = VPP0V_Q4open;   // 0v
+                setLedW(1);
+                setLedR(1);
+                break;
+        case 1: PORTD = VPP5V_Q4open;   // 5v
+                setLedW(1);
+                setLedR(0);
+                break;
+        case 2: PORTD = VPP10V_Q4open; // 10v
+                setLedW(0);
+                setLedR(0);
+                State = 0;
+                break;
+      }
+
+
+      
+    }
     switch (getButton()) {
     
       case btRead:
@@ -1229,19 +1381,47 @@ void waitRestart()
       case btMoins:
       case btVal:
       case btValRel:
+           promReadDisplay();
            while(1); 
       default:;
     }
   }
 }
+/* simplified Read socket , do not use storage array */
+void promReadDisplay() {
+  byte testByte;
+  setLed(1); 
+  setLedR(0);
+  setLedW(1);
+  PORTB = 255; //turn on pull up resistors
+  Serial.print ("\nR:");
+  clearPromBitSelector;
+  PORTD = VPP5V_Q4open;   // 5v while buck is 'off' goes through the bd139
+  PORTB = 255;          // turn on pull up resistors
+
+  for (promAddress=0; promAddress<32; promAddress++) {
+    setPromAddr(promAddress);
+    delay(30);  // let at least 2 irq to update shift registers
+    promReadCS0;
+    delayMicroseconds(50);
+    testByte = PINB;
+    promReadCS1;
+    printHex(testByte ); // serial display
+    Serial.print(" ");
+  }
+  PORTD = VPP0V_Q4open;
+  PORTB = 0; //turn off pull up resistors
+  setLedR(1);
+  Serial.println();
+}
 void promWriteDisplay() {
   byte testByte;
   setLed(1); 
-  setLedW(0);
   setLedR(1);
-  Serial.print("W:");
+  setLedW(0);
+  Serial.print("\nW:");
   clearPromBitSelector;
-  PORTD = vppNoPulse;   // 5v while buck is 'off' goes through the bd139
+  PORTD = VPP5V_Q4open;   // 5v while buck is 'off' goes through the bd139
   PORTB = 255;          // turn on pull up resistors
 
   for (promAddress=0; promAddress<32; promAddress++) {
@@ -1254,8 +1434,9 @@ void promWriteDisplay() {
     printHex(testByte);
     Serial.print(" ");
   }
-  PORTD = vppNoPulse+vppNoBoost;
+  PORTD = VPP0V_Q4open;
   PORTB = 0; //turn off pull up resistors
+  setLedW(1);
   Serial.println();
 }
 /*
@@ -1267,27 +1448,14 @@ void loop ()
 {
   byte testByte, newByte;
   bool pause;
-  
-  setPromBitSelector(0);
- 
-  PORTD = ps_turnup;                 // let buck charge caps
-  delay(100);                           // 3 to 4 ms to stabilize buck
-  PORTD = ps_setvpp;                 // power the chip
-  delay(50);                         //
-  PORTD = ps_setpulse;               // power the pin
-  delay(50);                         //
-  promWriteDisplay();
 
-  // Find a bit to program
+  /* read the W socket */
   setLed(1); 
   setLedW(0);
   setLedR(1);
-
-
   clearPromBitSelector;
-  PORTD = vppNoPulse;   // 5v while buck is 'off' goes through the bd139
-  PORTB = 255;          // turn on pull up resistors
-
+  PORTD = VPP5V_Q4open;  // power the +pin for reading W socket
+  PORTB = 255;            // turn on pull up resistors
 
   for (promAddress=0; promAddress<32; promAddress++) {
     setPromAddr(promAddress);
@@ -1297,63 +1465,70 @@ void loop ()
     testByte = PINB;
     promWriteCS1;
     if (testByte != 255) break;  // found a byte with some bits to burn.
-    wdt_reset();
   }
-  PORTD = vppNoPulse+vppNoBoost;
+  PORTD =  VPP0V_Q4open;
   PORTB = 0; //turn off pull up resistors
+  setLedW(1);
 
-
-  byte BIT = 255;
-  //search a bit programmable (eg =0)
-  if ( !(testByte & _BV(0)) ) BIT = 0;
-  if ( !(testByte & _BV(1)) ) BIT = 1;
-  if ( !(testByte & _BV(2)) ) BIT = 2;
-  if ( !(testByte & _BV(3)) ) BIT = 3;
-  if ( !(testByte & _BV(4)) ) BIT = 4;
-  if ( !(testByte & _BV(5)) ) BIT = 5;
-  if ( !(testByte & _BV(6)) ) BIT = 6;
+  /* check the reading result */
+  byte BIT = 255;    //search a bit programmable (eg =0)
   if ( !(testByte & _BV(7)) ) BIT = 7;
+  if ( !(testByte & _BV(6)) ) BIT = 6;
+  if ( !(testByte & _BV(5)) ) BIT = 5;
+  if ( !(testByte & _BV(4)) ) BIT = 4;
+  if ( !(testByte & _BV(3)) ) BIT = 3;
+  if ( !(testByte & _BV(2)) ) BIT = 2;
+  if ( !(testByte & _BV(1)) ) BIT = 1;
+  if ( !(testByte & _BV(0)) ) BIT = 0;
 
   if (BIT == 255) {
-    Serial.print("Error, no bit to program in this prom !! ");
-    waitRestart();
+    Serial.println("Error, no bit to program in this prom !! ");
+    waitRestart(false);
   }
+  
   Serial.println();
-  Serial.print("Found byte to programm (at ");
+  Serial.print("Found bit to programm (at ");
   Serial.print(promAddress);
   Serial.print(") ");
   printHex(testByte);
   Serial.println();
 
-  /*
-   * We have the bit and addressto forcably burn
-   */
+
+  /* We have the bit and addressto to burn  */
   setPromBitSelector(BIT);
   setPromAddr(promAddress);
+  delay(30);  // let at least 2 irq to update shift registers
 
-  byte burnCount = 0;
+  /* try to burn it while watching keypresses */
+  pause = false;
   do {
 
     wdt_reset();
     if (!pause) {
-      Serial.print("Prog loop counter:");
-      Serial.println(++burnCount);
+      Serial.print(".");
+  
+      doProgTBP18S030();
 
-      //set promAdress
-      //setPromAddr(promAddress);
-      //setPromBitSelector(BIT);
-      //delay(200); //relay response
-  
-      doTestPulse();
-      delay(200); //slow a little
-  
-  
+      /* READING BACK ALWAYS FAIL FOR THE 18S030 */
+
+      // waiting for watchdog  this method read back correctly the new byte
+      // but whitout control, will burn the entire prom !
+      // while(1);
+      
       //read back the byte
+      clearPromBitSelector;     //useless
+      setPromBitSelector(BIT);  //but was part of
+      setPromAddr(promAddress); //tryin readin back, unsuccessfully
+      PORTD = VPP5V_Q4open;     // power the +pin for reading W socket
+      delay(30);                //let at least 2 irq to update shift registers
+
       promWriteCS0;
       delayMicroseconds(50);
       newByte = PINB;
       promWriteCS1;
+      PORTD = VPP0V_Q4open;
     }
+
     switch (getButton()) {
 
     case btRead:
@@ -1364,6 +1539,7 @@ void loop ()
            pause = false;
            setPromBitSelector(BIT);
            setPromAddr(promAddress);
+           delay(30);      //let at least 2 irq to update shift registers
            break;
     case btMoins:
            pause = true;
@@ -1375,10 +1551,11 @@ void loop ()
     default:;
     }
 
-  } while (newByte == testByte);
+  } while (0 && newByte == testByte); //force out until readback OK !!
 
-  Serial.println("BIT PROGRAMMED");
-  waitRestart();  
+  Serial.print("\nBIT PROGRAMMED:");
+  printHex(newByte);
+  waitRestart(false);  
 }
 
 #endif
