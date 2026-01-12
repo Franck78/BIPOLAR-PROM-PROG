@@ -10,7 +10,7 @@ Rev "v1.1"
 Comp "https://buymeacoffee.com/franck78 if usefull to you"
 Comment1 ""
 Comment2 ""
-Comment3 "Elektor de 1980 inpired"
+Comment3 "Elektor september 1980 inspired, french edition"
 Comment4 "For PROM N82S23 N82S123 TBP18S030N"
 $EndDescr
 Wire Wire Line
@@ -4077,4 +4077,6 @@ v1.2 todo
 Wire Wire Line
 	10700 9550 10300 9550
 Connection ~ 10300 9550
+Text Notes 7850 8550 0    44   ~ 0
+from Elektor 9/1980 french edition
 $EndSCHEMATC
